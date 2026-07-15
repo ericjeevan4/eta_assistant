@@ -1,334 +1,153 @@
-#eta assistan code for the pop up messages initially its wrong
-
 from fastapi import FastAPI
 from pydantic import BaseModel
 import requests
-import time
 import random
 
 app = FastAPI()
 
 # =========================
-# VALID QUESTION KEYWORDS
+# LOGIN DETAILS
 # =========================
 
-VALID_KEYWORDS = [
-    "unusual energy spikes",
-    "highest spikes",
-    "unusual spikes"
-]
+LOGIN_URL = "https://test.energyeta.ai/user/login"
 
-# =========================
-# API DETAILS
-# =========================
-
-POST_API_URL = "https://test.energyeta.ai/user/login"
-GET_API_URL = "https://test.energyeta.ai/machine/getTopEnergyContributedMachines/6475b0fd2bc7715a17864db1?startTime=2025-04-01T08:13:01.177Z&endTime=2025-04-07T08:13:01.177Z"
-
-LOGIN_PAYLOAD = {
+login_payload = {
     "email": "development@thermelgy.com",
     "password": "admin@123"
 }
 
 # =========================
-# REQUEST MODEL
+# ALERT API
 # =========================
 
-class QuestionRequest(BaseModel):
-    question: str
+ALERT_URL = "https://test.energyeta.ai/alert/getAllAlerts"
 
 # =========================
-# TOKEN
+# REQUEST BODY MODEL
 # =========================
 
-def get_access_token():
+class AlertRequest(BaseModel):
+    page: int = 1
+    limit: int = 50
+    clientId: str
+    search: str = ""
+    alertType: str = "alarm"
 
-    try:
-
-        response = requests.post(
-            POST_API_URL,
-            json=LOGIN_PAYLOAD
-        )
-
-        if response.status_code == 200:
-
-            return response.json()["data"]["accessToken"]
-
-        return None
-
-    except:
-
-        return None
 
 # =========================
-# FETCH DATA
+# GET TOKEN FUNCTION
 # =========================
 
-def fetch_api_data(token):
+def get_token():
 
-    try:
+    response = requests.post(LOGIN_URL, json=login_payload)
 
-        headers = {
-            "Authorization": token
-        }
+    data = response.json()
 
-        response = requests.get(
-            GET_API_URL,
-            headers=headers
-        )
+    token = data["data"]["accessToken"]
 
-        if response.status_code == 200:
+    return token
 
-            return response.json().get(
-                "data",
-                {}
-            )
-
-        return None
-
-    except:
-
-        return None
 
 # =========================
-# PROCESS DATA
+# MAIN ALERT API
 # =========================
 
-def calculate_top_spikes(api_data):
+@app.post("/critical-alerts")
+def get_alerts(request: AlertRequest):
 
-    machine_history = {}
+    token = get_token()
 
-    for date, machines in api_data.items():
+    headers = {
+        "Authorization": token
+    }
 
-        for machine in machines:
+    payload = {
+        "page": request.page,
+        "limit": request.limit,
+        "clientId": request.clientId,
+        "search": request.search,
+        "alertType": request.alertType
+    }
 
-            name = machine.get(
-                "machineName"
-            )
-
-            kwh = machine.get(
-                "kwh",
-                0
-            )
-
-            if name not in machine_history:
-
-                machine_history[name] = []
-
-            machine_history[name].append({
-                "date": date,
-                "kwh": kwh
-            })
-
-    results = []
-
-    for machine_name, history in machine_history.items():
-
-        if len(history) < 2:
-            continue
-
-        first = history[0]["kwh"]
-
-        last = history[-1]["kwh"]
-
-        latest_date = history[-1]["date"]
-
-        if first == 0:
-            continue
-
-        slope_percent = (
-            (last - first) / first
-        ) * 100
-
-        if slope_percent > 0:
-
-            results.append({
-                "machineName": machine_name,
-                "latestDate": latest_date,
-                "slopePercent": round(
-                    slope_percent,
-                    2
-                )
-            })
-
-    # DESCENDING ORDER
-    results.sort(
-        key=lambda x: x["slopePercent"],
-        reverse=True
+    response = requests.post(
+        ALERT_URL,
+        json=payload,
+        headers=headers
     )
 
-    return results[:3]
+    result = response.json()
 
-# =========================
-# FORMAT OUTPUT
-# =========================
+    alerts = result["data"]["data"]
 
-def format_output(top_spikes):
+    # Get latest 3 alerts
+    latest_alerts = alerts[:3]
 
-    heading_variants = [
-
-        "⚠ Unusual Energy Spikes Detected",
-
-        "⚠ Energy Spike Alert",
-
-        "⚠ Significant Energy Increase Observed",
-
-        "⚠ Noticeable Energy Consumption Rise"
-
+    # Dynamic intro lines
+    intro_lines = [
+        "The system identified a few alerts that may require attention:",
+        "Recent anomalies were detected in the monitoring system:",
+        "The following alerts were observed from the latest machine activity:",
+        "A few operational alerts were detected recently:"
     ]
 
-    intro = random.choice(
-        heading_variants
-    )
+    selected_intro = random.choice(intro_lines)
 
-    lines = [intro]
+    bullet_points = []
 
-    for m in top_spikes:
+    for alert in latest_alerts:
 
-        phrase_templates = [
+        machine_name = alert.get(
+            "machine",
+            {}
+        ).get(
+            "machineName",
+            "Unknown Machine"
+        )
 
-            f"• {m['machineName']} recorded a spike increase of {m['slopePercent']}% on {m['latestDate']}.",
+        trigger = alert.get("trigger", {})
 
-            f"• Significant energy growth of {m['slopePercent']}% was detected in {m['machineName']} on {m['latestDate']}.",
+        display_name = trigger.get(
+            "displayName",
+            "Unknown Alert"
+        )
 
-            f"• {m['machineName']} showed an unusual energy rise of {m['slopePercent']}% during analysis on {m['latestDate']}.",
+        field_value = trigger.get(
+            "fieldValue",
+            "N/A"
+        )
 
-            f"• Monitoring identified a {m['slopePercent']}% spike in {m['machineName']} on {m['latestDate']}.",
+        bullet_templates = [
 
-            f"• {m['machineName']} experienced a notable slope increase of {m['slopePercent']}% on {m['latestDate']}."
+            f"• {machine_name} reported {display_name} with current value {field_value}.",
+
+            f"• An alert was triggered in {machine_name} for {display_name} reaching {field_value}.",
+
+            f"• {display_name} in {machine_name} is currently showing a value of {field_value}.",
+
+            f"• Monitoring detected unusual activity in {machine_name}: {display_name} = {field_value}.",
+
+            f"• The system observed {display_name} at {field_value} in {machine_name}.",
+
+            f"• Alert generated from {machine_name} due to {display_name} value {field_value}."
 
         ]
 
-        lines.append(
-            random.choice(
-                phrase_templates
-            )
-        )
+        bullet = random.choice(bullet_templates)
 
-    return "\n\n".join(lines)
+        bullet_points.append(bullet)
 
-# =========================
-# HOME ROUTE
-# =========================
-
-@app.get("/")
-def home():
-
-    return {
-        "message": "ETA FastAPI Running"
-    }
-
-# =========================
-# MAIN ROUTE
-# =========================
-
-@app.post("/predict")
-def predict(data: QuestionRequest):
-
-    start = time.time()
-
-    # =========================
-    # QUESTION VALIDATION
-    # =========================
-
-    question_lower = data.question.lower()
-
-    question_valid = any(
-        keyword in question_lower
-        for keyword in VALID_KEYWORDS
+    final_answer = (
+        selected_intro +
+        "\n\n" +
+        "\n".join(bullet_points)
     )
-
-    if not question_valid:
-
-        return {
-            "statusCode": 400,
-            "data": {
-                "question": data.question,
-                "answer": "Unsupported question."
-            },
-            "msg": "Question validation failed"
-        }
-
-    # =========================
-    # GET TOKEN
-    # =========================
-
-    token = get_access_token()
-
-    if not token:
-
-        return {
-            "statusCode": 500,
-            "data": {
-                "question": data.question,
-                "answer": "Token generation failed."
-            },
-            "msg": "Failed"
-        }
-
-    # =========================
-    # FETCH API DATA
-    # =========================
-
-    api_data = fetch_api_data(
-        token
-    )
-
-    if not api_data:
-
-        return {
-            "statusCode": 500,
-            "data": {
-                "question": data.question,
-                "answer": "API data fetch failed."
-            },
-            "msg": "Failed"
-        }
-
-    # =========================
-    # PROCESS TOP SPIKES
-    # =========================
-
-    top_spikes = calculate_top_spikes(
-        api_data
-    )
-
-    # =========================
-    # GENERATE HUMAN RESPONSE
-    # =========================
-
-    final_output = format_output(
-        top_spikes
-    )
-
-    print(
-        "Total Time:",
-        time.time() - start
-    )
-
-    # =========================
-    # FINAL RESPONSE
-    # =========================
 
     return {
         "statusCode": 200,
         "data": {
-            "question": data.question,
-            "answer": final_output
+            "question": "Did the system identify any anomalies or alerts that require immediate attention?",
+            "answer": final_answer
         },
         "msg": "Success"
     }
-
-# =========================
-# LOCAL RUN
-# =========================
-
-if __name__ == "__main__":
-
-    import uvicorn
-
-    uvicorn.run(
-        app,
-        host="0.0.0.0",
-        port=7860
-    )
