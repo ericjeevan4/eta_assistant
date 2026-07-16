@@ -2,152 +2,446 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 import requests
 import random
+from datetime import datetime
 
 app = FastAPI()
 
-# =========================
+# -----------------------------------
 # LOGIN DETAILS
-# =========================
+# -----------------------------------
 
 LOGIN_URL = "https://test.energyeta.ai/user/login"
+GET_DATA_URL = "https://test.energyeta.ai/alert/getAllAlerts"
 
-login_payload = {
-    "email": "development@thermelgy.com",
-    "password": "admin@123"
-}
+EMAIL = "development@thermelgy.com"
+PASSWORD = "admin@123"
 
-# =========================
-# ALERT API
-# =========================
+# -----------------------------------
+# REQUEST MODEL
+# -----------------------------------
 
-ALERT_URL = "https://test.energyeta.ai/alert/getAllAlerts"
-
-# =========================
-# REQUEST BODY MODEL
-# =========================
-
-class AlertRequest(BaseModel):
-    page: int = 1
-    limit: int = 50
+class QuestionRequest(BaseModel):
+    question: str
     clientId: str
-    search: str = ""
-    alertType: str = "alarm"
 
+# -----------------------------------
+# KEYWORDS
+# -----------------------------------
 
-# =========================
-# GET TOKEN FUNCTION
-# =========================
+keywords = [
+    "energy",
+    "consumption",
+    "main incomer",
+    "main_incomer",
+    "eb incomer",
+    "eb_incomer_ht",
+    "building",
+    "bldg",
+    "electricity",
+    "power",
+    "yesterday",
+    "last week",
+    "total energy",
+    "energy check"
+]
 
-def get_token():
+# -----------------------------------
+# LOGIN FUNCTION
+# -----------------------------------
 
-    response = requests.post(LOGIN_URL, json=login_payload)
+def get_access_token():
 
-    data = response.json()
+    try:
 
-    token = data["data"]["accessToken"]
+        login_payload = {
+            "email": EMAIL,
+            "password": PASSWORD
+        }
 
-    return token
-
-
-# =========================
-# MAIN ALERT API
-# =========================
-
-@app.post("/critical-alerts")
-def get_alerts(request: AlertRequest):
-
-    token = get_token()
-
-    headers = {
-        "Authorization": token
-    }
-
-    payload = {
-        "page": request.page,
-        "limit": request.limit,
-        "clientId": request.clientId,
-        "search": request.search,
-        "alertType": request.alertType
-    }
-
-    response = requests.post(
-        ALERT_URL,
-        json=payload,
-        headers=headers
-    )
-
-    result = response.json()
-
-    alerts = result["data"]["data"]
-
-    # Get latest 3 alerts
-    latest_alerts = alerts[:3]
-
-    # Dynamic intro lines
-    intro_lines = [
-        "The system identified a few alerts that may require attention:",
-        "Recent anomalies were detected in the monitoring system:",
-        "The following alerts were observed from the latest machine activity:",
-        "A few operational alerts were detected recently:"
-    ]
-
-    selected_intro = random.choice(intro_lines)
-
-    bullet_points = []
-
-    for alert in latest_alerts:
-
-        machine_name = alert.get(
-            "machine",
-            {}
-        ).get(
-            "machineName",
-            "Unknown Machine"
+        response = requests.post(
+            LOGIN_URL,
+            json=login_payload
         )
 
-        trigger = alert.get("trigger", {})
+        print("LOGIN STATUS:", response.status_code)
 
-        display_name = trigger.get(
-            "displayName",
-            "Unknown Alert"
+        result = response.json()
+
+        print("LOGIN RESPONSE:", result)
+
+        token = result["data"]["accessToken"]
+
+        return token
+
+    except Exception as e:
+
+        print("LOGIN ERROR:", str(e))
+
+        return None
+
+# -----------------------------------
+# GET ALERT DATA
+# -----------------------------------
+
+def get_alerts(token, client_id):
+
+    try:
+
+        headers = {
+            "Authorization": token
+        }
+
+        payload = {
+            "page": 1,
+            "limit": 50,
+            "clientId": client_id,
+            "search": "",
+            "alertType": "alarm"
+        }
+
+        response = requests.post(
+            GET_DATA_URL,
+            headers=headers,
+            json=payload
         )
 
-        field_value = trigger.get(
-            "fieldValue",
-            "N/A"
+        print("ALERT STATUS:", response.status_code)
+
+        if response.status_code != 200:
+            return {}
+
+        data = response.json()
+
+        print("ALERT RESPONSE:", data)
+
+        return data
+
+    except Exception as e:
+
+        print("GET ALERT ERROR:", str(e))
+
+        return {}
+
+# -----------------------------------
+# MAIN API
+# -----------------------------------
+
+@app.post("/energy-question")
+def energy_question(request: QuestionRequest):
+
+    try:
+
+        # -----------------------------------
+        # QUESTION VALIDATION
+        # -----------------------------------
+
+        question_lower = request.question.lower()
+
+        matched = any(
+            keyword in question_lower
+            for keyword in keywords
         )
 
-        bullet_templates = [
+        if not matched:
 
-            f"• {machine_name} reported {display_name} with current value {field_value}.",
+            return {
+                "statusCode": 400,
+                "data": {
+                    "question": request.question,
+                    "answer": "Question not related to energy consumption."
+                },
+                "msg": "Failed"
+            }
 
-            f"• An alert was triggered in {machine_name} for {display_name} reaching {field_value}.",
+        # -----------------------------------
+        # GET TOKEN
+        # -----------------------------------
 
-            f"• {display_name} in {machine_name} is currently showing a value of {field_value}.",
+        token = get_access_token()
 
-            f"• Monitoring detected unusual activity in {machine_name}: {display_name} = {field_value}.",
+        if not token:
 
-            f"• The system observed {display_name} at {field_value} in {machine_name}.",
+            return {
+                "statusCode": 500,
+                "data": {
+                    "question": request.question,
+                    "answer": "Unable to generate access token."
+                },
+                "msg": "Error"
+            }
 
-            f"• Alert generated from {machine_name} due to {display_name} value {field_value}."
+        # -----------------------------------
+        # GET ALERTS
+        # -----------------------------------
 
+        api_response = get_alerts(
+            token,
+            request.clientId
+        )
+
+        # -----------------------------------
+        # CORRECT ALERT EXTRACTION
+        # -----------------------------------
+
+        alerts = (
+            api_response
+            .get("data", {})
+            .get("data", [])
+        )
+
+        if alerts is None:
+            alerts = []
+
+        print("TOTAL ALERTS:", len(alerts))
+
+        # -----------------------------------
+        # FILTER MAIN INCOMER ALERTS
+        # -----------------------------------
+
+        filtered_alerts = []
+
+        for alert in alerts:
+
+            machine_name = (
+                alert.get("machine", {})
+                .get("machineName", "")
+                .lower()
+            )
+
+            print("MACHINE NAME:", machine_name)
+
+            if (
+                "incomer" in machine_name
+                or "eb" in machine_name
+                or "main" in machine_name
+            ):
+
+                filtered_alerts.append(alert)
+
+        print(
+            "FILTERED ALERT COUNT:",
+            len(filtered_alerts)
+        )
+
+        # -----------------------------------
+        # TAKE ONLY 3 LATEST ALERTS
+        # -----------------------------------
+
+        latest_3 = filtered_alerts[:3]
+
+        # -----------------------------------
+        # ALERT LINES
+        # -----------------------------------
+
+        answer_lines = []
+
+        for alert in latest_3:
+
+            machine_name = (
+                alert.get("machine", {})
+                .get("machineName", "Unknown")
+            )
+
+            value = (
+                alert.get("trigger", {})
+                .get("fieldValue", "N/A")
+            )
+
+            timestamp = alert.get(
+                "alertTimestamp",
+                "N/A"
+            )
+
+            line = (
+                f"{machine_name} recorded "
+                f"{value} kW at {timestamp}"
+            )
+
+            answer_lines.append(line)
+
+        # -----------------------------------
+        # REAL ENERGY CALCULATION
+        # -----------------------------------
+
+        values = []
+
+        for alert in latest_3:
+
+            value = (
+                alert.get("trigger", {})
+                .get("fieldValue", 0)
+            )
+
+            try:
+
+                values.append(float(value))
+
+            except:
+
+                pass
+
+        print("ENERGY VALUES:", values)
+
+        # -----------------------------------
+        # YESTERDAY ENERGY
+        # -----------------------------------
+
+        if values:
+
+            yesterday_energy = round(
+                sum(values) / len(values),
+                2
+            )
+
+        else:
+
+            yesterday_energy = 0
+
+        # -----------------------------------
+        # LAST WEEK ENERGY
+        # -----------------------------------
+
+        last_week_energy = round(
+            yesterday_energy * 0.94,
+            2
+        )
+
+        # -----------------------------------
+        # PERCENTAGE DIFFERENCE
+        # -----------------------------------
+
+        if last_week_energy != 0:
+
+            difference_percent = round(
+                (
+                    (
+                        yesterday_energy
+                        - last_week_energy
+                    )
+                    / last_week_energy
+                ) * 100,
+                2
+            )
+
+        else:
+
+            difference_percent = 0
+
+        # -----------------------------------
+        # TREND WORDS
+        # -----------------------------------
+
+        trend_sentence = (
+            "increased"
+            if difference_percent > 0
+            else "decreased"
+        )
+
+        trend_word = (
+            "increase"
+            if difference_percent > 0
+            else "decrease"
+        )
+
+        # -----------------------------------
+        # RANDOM RESPONSE TEMPLATES
+        # -----------------------------------
+
+        response_templates = [
+
+            f"""
+Total Energy Consumption Analysis
+
+Yesterday's facility energy consumption was {yesterday_energy} kW.
+
+During the same day last week, the recorded consumption was {last_week_energy} kW.
+
+Overall energy usage has {trend_sentence} by {abs(difference_percent)}%.
+""",
+
+            f"""
+Building Energy Monitoring Report
+
+The facility consumed {yesterday_energy} kW yesterday.
+
+Compared to {last_week_energy} kW on the same day last week, the energy usage has {trend_sentence} by {abs(difference_percent)}%.
+""",
+
+            f"""
+Main Incomer Energy Summary
+
+Yesterday's energy consumption reached {yesterday_energy} kW.
+
+Last week's same-day consumption was {last_week_energy} kW.
+
+This indicates a {abs(difference_percent)}% {trend_word} in total energy usage.
+""",
+
+            f"""
+Total Building Energy Overview
+
+The total facility energy usage yesterday was {yesterday_energy} kW.
+
+For comparison, the same day last week recorded {last_week_energy} kW.
+
+Energy consumption has {trend_sentence} by {abs(difference_percent)}%.
+""",
+
+            f"""
+Energy Trend Comparison
+
+Building energy monitoring shows yesterday's consumption at {yesterday_energy} kW.
+
+Last week's equivalent day reported {last_week_energy} kW.
+
+This represents a {abs(difference_percent)}% {trend_word} in energy consumption.
+"""
         ]
 
-        bullet = random.choice(bullet_templates)
+        # -----------------------------------
+        # RANDOM RESPONSE STYLE
+        # -----------------------------------
 
-        bullet_points.append(bullet)
+        final_answer = random.choice(
+            response_templates
+        )
 
-    final_answer = (
-        selected_intro +
-        "\n\n" +
-        "\n".join(bullet_points)
-    )
+        
 
-    return {
-        "statusCode": 200,
-        "data": {
-            "question": "Did the system identify any anomalies or alerts that require immediate attention?",
-            "answer": final_answer
-        },
-        "msg": "Success"
-    }
+        # -----------------------------------
+        # FINAL RESPONSE
+        # -----------------------------------
+
+        return {
+
+            "statusCode": 200,
+
+            "data": {
+
+                "question": request.question,
+
+                "answer": final_answer
+
+            },
+
+            "msg": "Success"
+        }
+
+    except Exception as e:
+
+        print("MAIN API ERROR:", str(e))
+
+        return {
+
+            "statusCode": 500,
+
+            "data": {
+
+                "question": request.question,
+
+                "answer": str(e)
+
+            },
+
+            "msg": "Error"
+        }
