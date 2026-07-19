@@ -1,22 +1,16 @@
-#4
+#5
 from fastapi import FastAPI
 from pydantic import BaseModel
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import random
 
 app = FastAPI()
 
-# ---------------- REQUEST MODEL ----------------
-
-class QuestionRequest(BaseModel):
-    question: str
-    clientId: str
-
 # ---------------- LOGIN DETAILS ----------------
 
-POST_URL = "https://test.energyeta.ai/user/login"
-GET_URL = "https://test.energyeta.ai/alert/getAllAlerts"
+LOGIN_URL = "https://test.energyeta.ai/user/login"
+ALERT_URL = "https://test.energyeta.ai/alert/getAllAlerts"
 
 LOGIN_DATA = {
     "email": "development@thermelgy.com",
@@ -25,32 +19,57 @@ LOGIN_DATA = {
 
 # ---------------- KEYWORDS ----------------
 
-SENSOR_KEYWORDS = [
-    "sensor",
-    "meter",
-    "health",
-    "energy meter",
-    "sensor health",
-    "anomaly",
-    "alarm",
-    "alert",
-    "ea reset",
-    "failure",
-    "meters",
-    "sensors"
+KEYWORDS = [
+    "communication failures",
+    "data logging failure",
+    "data logging failures",
+    "gaps",
+    "communication loss",
+    "data communication loss",
+    "communication gap",
+    "network issue",
+    "network failure"
 ]
 
-# ---------------- MAIN API ----------------
+# ---------------- REQUEST BODY ----------------
 
-@app.post("/sensor-health")
-def sensor_health(request: QuestionRequest):
+class QuestionRequest(BaseModel):
+    question: str
+    clientId: str
+
+
+# ---------------- API ENDPOINT ----------------
+
+@app.post("/communication-failures")
+def communication_failures(request: QuestionRequest):
 
     try:
+
+        # ---------------- QUESTION VALIDATION ----------------
+
+        question_lower = request.question.lower()
+
+        if not any(
+            keyword in question_lower
+            for keyword in KEYWORDS
+        ):
+
+            return {
+                "statusCode": 400,
+                "data": {
+                    "question": request.question,
+                    "answer": (
+                        "Question does not match "
+                        "communication failure category."
+                    )
+                },
+                "msg": "Failed"
+            }
 
         # ---------------- LOGIN API ----------------
 
         login_response = requests.post(
-            POST_URL,
+            LOGIN_URL,
             json=LOGIN_DATA
         )
 
@@ -58,14 +77,15 @@ def sensor_health(request: QuestionRequest):
 
         token = login_result["data"]["accessToken"]
 
-        # ---------------- LAST 12 HOURS ----------------
+        # ---------------- HEADERS ----------------
 
-        now = datetime.utcnow()
-        last_12_hours = now - timedelta(hours=12)
+        headers = {
+            "Authorization": token
+        }
 
-        # ---------------- ALERT API BODY ----------------
+        # ---------------- ALERT PAYLOAD ----------------
 
-        body = {
+        alert_payload = {
             "page": 1,
             "limit": 50,
             "clientId": request.clientId,
@@ -73,197 +93,121 @@ def sensor_health(request: QuestionRequest):
             "alertType": "alarm"
         }
 
-        headers = {
-            "Authorization": token
-        }
+        # ---------------- ALERT API ----------------
 
-        # ---------------- GET ALERT DATA ----------------
-
-        response = requests.post(
-            GET_URL,
-            json=body,
+        alert_response = requests.post(
+            ALERT_URL,
+            json=alert_payload,
             headers=headers
         )
 
-        result = response.json()
+        alert_result = alert_response.json()
 
-        alerts = result["data"]["data"]
+        alerts = alert_result["data"]["data"]
 
-        latest_alerts = []
+        # ---------------- LAST 24 HOURS ----------------
 
-        # ---------------- FILTER LAST 12 HOURS ----------------
+        now = datetime.now(timezone.utc)
+
+        last_24_hours = now - timedelta(hours=24)
+
+        latest_devices = {}
 
         for alert in alerts:
 
-            alert_time = alert.get("alertTimestamp")
-
-            if alert_time:
-
-                alert_datetime = datetime.fromisoformat(
-                    alert_time.replace("Z", "")
+            alert_time = datetime.fromisoformat(
+                alert["alertTimestamp"].replace(
+                    "Z",
+                    "+00:00"
                 )
+            )
 
-                if alert_datetime >= last_12_hours:
+            # Only last 24 hours
+            if alert_time >= last_24_hours:
 
-                    latest_alerts.append(alert)
+                device_id = alert["machine"]["deviceId"]
 
-        # ---------------- SORT IN DESCENDING ORDER ----------------
+                # Store latest timestamp
+                if (
+                    device_id not in latest_devices
+                    or alert_time > latest_devices[device_id]
+                ):
+                    latest_devices[device_id] = alert_time
 
-        latest_alerts.sort(
-            key=lambda x: x.get("alertTimestamp", ""),
+        # ---------------- SORT LATEST FIRST ----------------
+
+        sorted_devices = sorted(
+            latest_devices.items(),
+            key=lambda x: x[1],
             reverse=True
         )
 
-        # ---------------- ONLY TOP 3 ALERTS ----------------
+        # Only latest 3 device IDs
+        top_3_devices = sorted_devices[:3]
 
-        latest_alerts = latest_alerts[:3]
-        
+        # ---------------- FINAL ANSWER ----------------
 
-        # ---------------- QUESTION CHECK ----------------
+        if len(top_3_devices) > 0:
 
-        question_lower = request.question.lower()
+            device_details = []
 
-        matched = any(
-            keyword in question_lower
-            for keyword in SENSOR_KEYWORDS
-        )
+            for device_id, timestamp in top_3_devices:
 
-        # ---------------- ANSWER GENERATION ----------------
-
-        if matched:
-
-            # ---------- NO ALERTS ----------
-
-            if len(latest_alerts) == 0:
-
-                healthy_sentences = [
-
-                    "All energy meters and sensors reported data correctly in the last 12 hours.",
-
-                    "No sensor failures or EA reset anomalies were detected in the last 12 hours.",
-
-                    "Sensor health status is normal. All devices are communicating properly.",
-
-                    "Energy meter and sensor monitoring indicates stable operation with no anomalies.",
-
-                    "All monitored sensors and energy meters are functioning correctly without alerts."
-                ]
-
-                answer = random.choice(healthy_sentences)
-
-            # ---------- ALERTS FOUND ----------
-
-            else:
-
-                bullet_points = []
-
-                for alert_obj in latest_alerts:
-
-                    machine_name = alert_obj["machine"]["machineName"]
-
-                    trigger = alert_obj.get("trigger", {})
-
-                    metric = trigger.get(
-                        "displayName",
-                        "sensor"
-                    )
-
-                    field_value = trigger.get(
-                        "fieldValue",
-                        0
-                    )
-
-                    trigger_point = trigger.get(
-                        "triggerPoint",
-                        [0]
-                    )[0]
-
-                    # ---------------- HUMAN EXPLANATION ----------------
-
-                    explanation = ""
-
-                    # ---------- POWER / HIGH VALUE ALERT ----------
-
-                    if (
-                        field_value > trigger_point
-                        and field_value > 10
-                    ):
-
-                        difference = round(
-                            field_value - trigger_point,
-                            2
-                        )
-
-                        templates = [
-
-                            f"• {machine_name} reported high {metric.lower()} readings of {field_value}, exceeding the threshold limit of {trigger_point}.",
-
-                            f"• {machine_name} recorded abnormal {metric.lower()} values. Current reading reached {field_value} against the limit of {trigger_point}.",
-
-                            f"• Monitoring detected elevated {metric.lower()} in {machine_name}. The recorded value was {field_value}, above the configured limit.",
-
-                            f"• {machine_name} crossed the permitted {metric.lower()} threshold with a recorded value of {field_value}.",
-
-                            f"• Sensor analysis found excessive {metric.lower()} levels in {machine_name}, reaching {field_value}."
-                        ]
-
-                        explanation = random.choice(
-                            templates
-                        )
-
-                    # ---------- SENSOR FAILURE / RESET ----------
-
-                    else:
-
-                        templates = [
-
-                            f"• {machine_name} generated a sensor alert for {metric} with a recorded value of {field_value}.",
-
-                            f"• An abnormal sensor event was detected in {machine_name}. {metric} reported a value of {field_value}.",
-
-                            f"• Monitoring identified unusual activity in {machine_name}, where {metric} triggered an alert value of {field_value}.",
-
-                            f"• {machine_name} reported irregular sensor behavior related to {metric} with a value of {field_value}.",
-
-                            f"• Sensor health monitoring detected an anomaly in {machine_name} for {metric} with a recorded value of {field_value}."
-                        ]
-
-                        explanation = random.choice(
-                            templates
-                        )
-
-                    bullet_points.append(
-                        explanation
-                    )
-
-                # ---------------- INTRO SENTENCE ----------------
-
-                intro_sentences = [
-
-                    "The following sensor and energy meter anomalies were detected in the last 12 hours:\n",
-
-                    "Recent monitoring identified these abnormal operating conditions:\n",
-
-                    "Sensor health analysis detected the following critical alerts:\n",
-
-                    "Energy monitoring systems reported these anomaly events:\n",
-
-                    "The latest health check identified the following issues:\n"
-                ]
-
-                answer = (
-                    random.choice(intro_sentences)
-                    + "\n\n"
-                    + "\n\n".join(bullet_points)
+                formatted_time = timestamp.strftime(
+                    "%Y-%m-%d %H:%M:%S UTC"
                 )
 
-        # ---------------- QUESTION NOT MATCHED ----------------
+                device_details.append(
+                    f"{device_id} ({formatted_time})"
+                )
+
+            # 7 dynamic response templates
+            response_templates = [
+
+                "Communication failures were identified within the last 24 hours for Device IDs: {}.",
+
+                "Recent data communication gaps were observed in the following devices during the past 24 hours: {}.",
+
+                "The monitoring system detected communication loss events for these devices in the last 24 hours: {}.",
+
+                "Network communication interruptions were recorded recently for Device IDs: {}.",
+
+                "Data logging failures have been identified in the last 24 hours for the following devices: {}.",
+
+                "The latest communication-related alerts were triggered for these Device IDs: {}.",
+
+                "Communication gap alerts were found recently for the following devices: {}."
+            ]
+
+            selected_response = random.choice(
+                response_templates
+            )
+
+            answer_text = selected_response.format(
+                ", ".join(device_details)
+            )
 
         else:
 
-            answer = (
-                "Question not related to sensor health check, "
-                "energy meters, anomalies, or alert monitoring."
+            no_issue_templates = [
+
+                "No communication failures were detected in the last 24 hours.",
+
+                "No recent data logging gaps were identified during the last 24 hours.",
+
+                "All monitored devices communicated successfully in the past 24 hours.",
+
+                "No communication loss events were found recently.",
+
+                "The system did not record any communication interruptions in the last 24 hours.",
+
+                "No network communication alerts were triggered recently.",
+
+                "No data communication issues were observed in the monitored devices."
+            ]
+
+            answer_text = random.choice(
+                no_issue_templates
             )
 
         # ---------------- FINAL RESPONSE ----------------
@@ -272,12 +216,10 @@ def sensor_health(request: QuestionRequest):
             "statusCode": 200,
             "data": {
                 "question": request.question,
-                "answer": answer
+                "answer": answer_text
             },
             "msg": "Success"
         }
-
-    # ---------------- ERROR HANDLING ----------------
 
     except Exception as e:
 
