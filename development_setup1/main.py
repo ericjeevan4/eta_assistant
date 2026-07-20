@@ -1,449 +1,290 @@
-#3
-
 from fastapi import FastAPI
 from pydantic import BaseModel
 import requests
+from datetime import datetime, timedelta
 import random
-from datetime import datetime
 
 app = FastAPI()
 
-# -----------------------------------
-# LOGIN DETAILS
-# -----------------------------------
-
-LOGIN_URL = "https://test.energyeta.ai/user/login"
-GET_DATA_URL = "https://test.energyeta.ai/alert/getAllAlerts"
-
-EMAIL = "development@thermelgy.com"
-PASSWORD = "admin@123"
-
-# -----------------------------------
-# REQUEST MODEL
-# -----------------------------------
+# ---------------- REQUEST MODEL ----------------
 
 class QuestionRequest(BaseModel):
     question: str
     clientId: str
 
-# -----------------------------------
-# KEYWORDS
-# -----------------------------------
+# ---------------- LOGIN DETAILS ----------------
 
-keywords = [
-    "energy",
-    "consumption",
-    "main incomer",
-    "main_incomer",
-    "eb incomer",
-    "eb_incomer_ht",
-    "building",
-    "bldg",
-    "electricity",
-    "power",
-    "yesterday",
-    "last week",
-    "total energy",
-    "energy check"
+POST_URL = "https://test.energyeta.ai/user/login"
+GET_URL = "https://test.energyeta.ai/alert/getAllAlerts"
+
+LOGIN_DATA = {
+    "email": "development@thermelgy.com",
+    "password": "admin@123"
+}
+
+# ---------------- KEYWORDS ----------------
+
+SENSOR_KEYWORDS = [
+    "sensor",
+    "meter",
+    "health",
+    "energy meter",
+    "sensor health",
+    "anomaly",
+    "alarm",
+    "alert",
+    "ea reset",
+    "failure",
+    "meters",
+    "sensors"
 ]
 
-# -----------------------------------
-# LOGIN FUNCTION
-# -----------------------------------
+# ---------------- MAIN API ----------------
 
-def get_access_token():
+@app.post("/sensor-health")
+def sensor_health(request: QuestionRequest):
 
     try:
 
-        login_payload = {
-            "email": EMAIL,
-            "password": PASSWORD
-        }
+        # ---------------- LOGIN API ----------------
 
-        response = requests.post(
-            LOGIN_URL,
-            json=login_payload
+        login_response = requests.post(
+            POST_URL,
+            json=LOGIN_DATA
         )
 
-        print("LOGIN STATUS:", response.status_code)
+        login_result = login_response.json()
 
-        result = response.json()
+        token = login_result["data"]["accessToken"]
 
-        print("LOGIN RESPONSE:", result)
+        # ---------------- LAST 12 HOURS ----------------
 
-        token = result["data"]["accessToken"]
+        now = datetime.utcnow()
+        last_12_hours = now - timedelta(hours=12)
 
-        return token
+        # ---------------- ALERT API BODY ----------------
 
-    except Exception as e:
-
-        print("LOGIN ERROR:", str(e))
-
-        return None
-
-# -----------------------------------
-# GET ALERT DATA
-# -----------------------------------
-
-def get_alerts(token, client_id):
-
-    try:
+        body = {
+            "page": 1,
+            "limit": 50,
+            "clientId": request.clientId,
+            "search": "",
+            "alertType": "alarm"
+        }
 
         headers = {
             "Authorization": token
         }
 
-        payload = {
-            "page": 1,
-            "limit": 50,
-            "clientId": client_id,
-            "search": "",
-            "alertType": "alarm"
-        }
+        # ---------------- GET ALERT DATA ----------------
 
         response = requests.post(
-            GET_DATA_URL,
-            headers=headers,
-            json=payload
+            GET_URL,
+            json=body,
+            headers=headers
         )
 
-        print("ALERT STATUS:", response.status_code)
+        result = response.json()
 
-        if response.status_code != 200:
-            return {}
+        alerts = result["data"]["data"]
 
-        data = response.json()
+        latest_alerts = []
 
-        print("ALERT RESPONSE:", data)
+        # ---------------- FILTER LAST 12 HOURS ----------------
 
-        return data
+        for alert in alerts:
 
-    except Exception as e:
+            alert_time = alert.get("alertTimestamp")
 
-        print("GET ALERT ERROR:", str(e))
+            if alert_time:
 
-        return {}
+                alert_datetime = datetime.fromisoformat(
+                    alert_time.replace("Z", "")
+                )
 
-# -----------------------------------
-# MAIN API
-# -----------------------------------
+                if alert_datetime >= last_12_hours:
 
-@app.post("/energy-question")
-def energy_question(request: QuestionRequest):
+                    latest_alerts.append(alert)
 
-    try:
+        # ---------------- SORT IN DESCENDING ORDER ----------------
 
-        # -----------------------------------
-        # QUESTION VALIDATION
-        # -----------------------------------
+        latest_alerts.sort(
+            key=lambda x: x.get("alertTimestamp", ""),
+            reverse=True
+        )
+
+        # ---------------- ONLY TOP 3 ALERTS ----------------
+
+        latest_alerts = latest_alerts[:3]
+        
+
+        # ---------------- QUESTION CHECK ----------------
 
         question_lower = request.question.lower()
 
         matched = any(
             keyword in question_lower
-            for keyword in keywords
+            for keyword in SENSOR_KEYWORDS
         )
 
-        if not matched:
+        # ---------------- ANSWER GENERATION ----------------
 
-            return {
-                "statusCode": 400,
-                "data": {
-                    "question": request.question,
-                    "answer": "Question not related to energy consumption."
-                },
-                "msg": "Failed"
-            }
+        if matched:
 
-        # -----------------------------------
-        # GET TOKEN
-        # -----------------------------------
+            # ---------- NO ALERTS ----------
 
-        token = get_access_token()
+            if len(latest_alerts) == 0:
 
-        if not token:
+                healthy_sentences = [
 
-            return {
-                "statusCode": 500,
-                "data": {
-                    "question": request.question,
-                    "answer": "Unable to generate access token."
-                },
-                "msg": "Error"
-            }
+                    "All energy meters and sensors reported data correctly in the last 12 hours.",
 
-        # -----------------------------------
-        # GET ALERTS
-        # -----------------------------------
+                    "No sensor failures or EA reset anomalies were detected in the last 12 hours.",
 
-        api_response = get_alerts(
-            token,
-            request.clientId
-        )
+                    "Sensor health status is normal. All devices are communicating properly.",
 
-        # -----------------------------------
-        # CORRECT ALERT EXTRACTION
-        # -----------------------------------
+                    "Energy meter and sensor monitoring indicates stable operation with no anomalies.",
 
-        alerts = (
-            api_response
-            .get("data", {})
-            .get("data", [])
-        )
+                    "All monitored sensors and energy meters are functioning correctly without alerts."
+                ]
 
-        if alerts is None:
-            alerts = []
+                answer = random.choice(healthy_sentences)
 
-        print("TOTAL ALERTS:", len(alerts))
+            # ---------- ALERTS FOUND ----------
 
-        # -----------------------------------
-        # FILTER MAIN INCOMER ALERTS
-        # -----------------------------------
+            else:
 
-        filtered_alerts = []
+                bullet_points = []
 
-        for alert in alerts:
+                for alert_obj in latest_alerts:
 
-            machine_name = (
-                alert.get("machine", {})
-                .get("machineName", "")
-                .lower()
-            )
+                    machine_name = alert_obj["machine"]["machineName"]
 
-            print("MACHINE NAME:", machine_name)
+                    trigger = alert_obj.get("trigger", {})
 
-            if (
-                "incomer" in machine_name
-                or "eb" in machine_name
-                or "main" in machine_name
-            ):
-
-                filtered_alerts.append(alert)
-
-        print(
-            "FILTERED ALERT COUNT:",
-            len(filtered_alerts)
-        )
-
-        # -----------------------------------
-        # TAKE ONLY 3 LATEST ALERTS
-        # -----------------------------------
-
-        latest_3 = filtered_alerts[:3]
-
-        # -----------------------------------
-        # ALERT LINES
-        # -----------------------------------
-
-        answer_lines = []
-
-        for alert in latest_3:
-
-            machine_name = (
-                alert.get("machine", {})
-                .get("machineName", "Unknown")
-            )
-
-            value = (
-                alert.get("trigger", {})
-                .get("fieldValue", "N/A")
-            )
-
-            timestamp = alert.get(
-                "alertTimestamp",
-                "N/A"
-            )
-
-            line = (
-                f"{machine_name} recorded "
-                f"{value} kW at {timestamp}"
-            )
-
-            answer_lines.append(line)
-
-        # -----------------------------------
-        # REAL ENERGY CALCULATION
-        # -----------------------------------
-
-        values = []
-
-        for alert in latest_3:
-
-            value = (
-                alert.get("trigger", {})
-                .get("fieldValue", 0)
-            )
-
-            try:
-
-                values.append(float(value))
-
-            except:
-
-                pass
-
-        print("ENERGY VALUES:", values)
-
-        # -----------------------------------
-        # YESTERDAY ENERGY
-        # -----------------------------------
-
-        if values:
-
-            yesterday_energy = round(
-                sum(values) / len(values),
-                2
-            )
-
-        else:
-
-            yesterday_energy = 0
-
-        # -----------------------------------
-        # LAST WEEK ENERGY
-        # -----------------------------------
-
-        last_week_energy = round(
-            yesterday_energy * 0.94,
-            2
-        )
-
-        # -----------------------------------
-        # PERCENTAGE DIFFERENCE
-        # -----------------------------------
-
-        if last_week_energy != 0:
-
-            difference_percent = round(
-                (
-                    (
-                        yesterday_energy
-                        - last_week_energy
+                    metric = trigger.get(
+                        "displayName",
+                        "sensor"
                     )
-                    / last_week_energy
-                ) * 100,
-                2
-            )
+
+                    field_value = trigger.get(
+                        "fieldValue",
+                        0
+                    )
+
+                    trigger_point = trigger.get(
+                        "triggerPoint",
+                        [0]
+                    )[0]
+
+                    # ---------------- HUMAN EXPLANATION ----------------
+
+                    explanation = ""
+
+                    # ---------- POWER / HIGH VALUE ALERT ----------
+
+                    if (
+                        field_value > trigger_point
+                        and field_value > 10
+                    ):
+
+                        difference = round(
+                            field_value - trigger_point,
+                            2
+                        )
+
+                        templates = [
+
+                            f"• {machine_name} reported high {metric.lower()} readings of {field_value}, exceeding the threshold limit of {trigger_point}.",
+
+                            f"• {machine_name} recorded abnormal {metric.lower()} values. Current reading reached {field_value} against the limit of {trigger_point}.",
+
+                            f"• Monitoring detected elevated {metric.lower()} in {machine_name}. The recorded value was {field_value}, above the configured limit.",
+
+                            f"• {machine_name} crossed the permitted {metric.lower()} threshold with a recorded value of {field_value}.",
+
+                            f"• Sensor analysis found excessive {metric.lower()} levels in {machine_name}, reaching {field_value}."
+                        ]
+
+                        explanation = random.choice(
+                            templates
+                        )
+
+                    # ---------- SENSOR FAILURE / RESET ----------
+
+                    else:
+
+                        templates = [
+
+                            f"• {machine_name} generated a sensor alert for {metric} with a recorded value of {field_value}.",
+
+                            f"• An abnormal sensor event was detected in {machine_name}. {metric} reported a value of {field_value}.",
+
+                            f"• Monitoring identified unusual activity in {machine_name}, where {metric} triggered an alert value of {field_value}.",
+
+                            f"• {machine_name} reported irregular sensor behavior related to {metric} with a value of {field_value}.",
+
+                            f"• Sensor health monitoring detected an anomaly in {machine_name} for {metric} with a recorded value of {field_value}."
+                        ]
+
+                        explanation = random.choice(
+                            templates
+                        )
+
+                    bullet_points.append(
+                        explanation
+                    )
+
+                # ---------------- INTRO SENTENCE ----------------
+
+                intro_sentences = [
+
+                    "The following sensor and energy meter anomalies were detected in the last 12 hours:\n",
+
+                    "Recent monitoring identified these abnormal operating conditions:\n",
+
+                    "Sensor health analysis detected the following critical alerts:\n",
+
+                    "Energy monitoring systems reported these anomaly events:\n",
+
+                    "The latest health check identified the following issues:\n"
+                ]
+
+                answer = (
+                    random.choice(intro_sentences)
+                    + "\n\n"
+                    + "\n\n".join(bullet_points)
+                )
+
+        # ---------------- QUESTION NOT MATCHED ----------------
 
         else:
 
-            difference_percent = 0
+            answer = (
+                "Question not related to sensor health check, "
+                "energy meters, anomalies, or alert monitoring."
+            )
 
-        # -----------------------------------
-        # TREND WORDS
-        # -----------------------------------
-
-        trend_sentence = (
-            "increased"
-            if difference_percent > 0
-            else "decreased"
-        )
-
-        trend_word = (
-            "increase"
-            if difference_percent > 0
-            else "decrease"
-        )
-
-        # -----------------------------------
-        # RANDOM RESPONSE TEMPLATES
-        # -----------------------------------
-
-        response_templates = [
-
-            f"""
-Total Energy Consumption Analysis
-
-Yesterday's facility energy consumption was {yesterday_energy} kW.
-
-During the same day last week, the recorded consumption was {last_week_energy} kW.
-
-Overall energy usage has {trend_sentence} by {abs(difference_percent)}%.
-""",
-
-            f"""
-Building Energy Monitoring Report
-
-The facility consumed {yesterday_energy} kW yesterday.
-
-Compared to {last_week_energy} kW on the same day last week, the energy usage has {trend_sentence} by {abs(difference_percent)}%.
-""",
-
-            f"""
-Main Incomer Energy Summary
-
-Yesterday's energy consumption reached {yesterday_energy} kW.
-
-Last week's same-day consumption was {last_week_energy} kW.
-
-This indicates a {abs(difference_percent)}% {trend_word} in total energy usage.
-""",
-
-            f"""
-Total Building Energy Overview
-
-The total facility energy usage yesterday was {yesterday_energy} kW.
-
-For comparison, the same day last week recorded {last_week_energy} kW.
-
-Energy consumption has {trend_sentence} by {abs(difference_percent)}%.
-""",
-
-            f"""
-Energy Trend Comparison
-
-Building energy monitoring shows yesterday's consumption at {yesterday_energy} kW.
-
-Last week's equivalent day reported {last_week_energy} kW.
-
-This represents a {abs(difference_percent)}% {trend_word} in energy consumption.
-"""
-        ]
-
-        # -----------------------------------
-        # RANDOM RESPONSE STYLE
-        # -----------------------------------
-
-        final_answer = random.choice(
-            response_templates
-        )
-
-        
-
-        # -----------------------------------
-        # FINAL RESPONSE
-        # -----------------------------------
+        # ---------------- FINAL RESPONSE ----------------
 
         return {
-
             "statusCode": 200,
-
             "data": {
-
                 "question": request.question,
-
-                "answer": final_answer
-
+                "answer": answer
             },
-
             "msg": "Success"
         }
 
+    # ---------------- ERROR HANDLING ----------------
+
     except Exception as e:
 
-        print("MAIN API ERROR:", str(e))
-
         return {
-
             "statusCode": 500,
-
             "data": {
-
                 "question": request.question,
-
                 "answer": str(e)
-
             },
-
-            "msg": "Error"
+            "msg": "Failed"
         }
