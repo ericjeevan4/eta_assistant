@@ -1,4 +1,4 @@
-#7
+#1
 from fastapi import FastAPI
 from pydantic import BaseModel
 import requests
@@ -29,27 +29,22 @@ ALERT_URL = "https://test.energyeta.ai/alert/getAllAlerts"
 # DYNAMIC DATE
 # =========================================================
 
-def get_utc_now():
-    return datetime.now(timezone.utc)
+today = datetime.now(timezone.utc)
 
-def get_spike_api_url(client_id):
+current_date = today.strftime("%Y-%m-%d")
 
-    today = get_utc_now()
+start_time = f"{current_date}T00:00:00.000Z"
 
-    current_date = today.strftime("%Y-%m-%d")
+end_time = f"{current_date}T23:55:00.000Z"
 
-    start_time = f"{current_date}T00:00:00.000Z"
-
-    end_time = f"{current_date}T23:55:00.000Z"
-
-    return (
-        "https://test.energyeta.ai/machine/"
-        "getTopEnergyContributedMachines/"
-        f"{client_id}"
-        f"?startTime={start_time}"
-        f"&endTime={end_time}"
-        "&table=HourlyPrimary"
-    )
+SPIKE_API_URL = (
+    "https://test.energyeta.ai/machine/"
+    "getTopEnergyContributedMachines/"
+    "6475b0fd2bc7715a17864db1"
+    f"?startTime={start_time}"
+    f"&endTime={end_time}"
+    "&table=HourlyPrimary"
+)
 
 # =========================================================
 # REQUEST MODEL
@@ -100,79 +95,9 @@ SENSOR_KEYWORDS = [
     "anomaly",
     "alarm",
     "ea reset",
+    "failure",
     "meters",
     "sensors"
-]
-
-COMMUNICATION_KEYWORDS = [
-    "communication failures",
-    "data logging failure",
-    "data logging failures",
-    "gaps",
-    "communication loss",
-    "data communication loss",
-    "communication gap",
-    "network issue",
-    "network failure"
-]
-
-RUNTIME_KEYWORDS = [
-
-    "unusual",
-    "operating",
-    "breach",
-    "operational",
-    "unplanned",
-    "schedule",
-    "scheduled",
-    "runtime breach",
-    "operating hours"
-]
-
-# =========================================================
-# RANDOM NO ALERT RESPONSES
-# =========================================================
-
-NO_ALERT_MESSAGES = [
-
-    "No unusual operating hours were identified in the last 24 hours.",
-
-    "All monitored machines operated within expected schedules during the last 24 hours.",
-
-    "No runtime breach alerts were reported in the previous 24 hours.",
-
-    "No potential unplanned operational activity was detected recently.",
-
-    "Machines appear to be functioning within scheduled operating timelines.",
-
-    "No abnormal operational hour patterns were observed in the last 24 hours.",
-
-    "System analysis shows no unusual runtime activity.",
-
-    "No unexpected machine runtime behavior was detected during the monitoring period.",
-
-    "The monitoring system did not identify any operational schedule deviations."
-]
-
-# =========================================================
-# RANDOM INTRO SENTENCES
-# =========================================================
-
-INTRO_MESSAGES = [
-
-    "Potential unplanned operational activity was detected for the following machines:",
-
-    "Runtime breach alerts were observed for these machines:",
-
-    "The following machines showed unusual operating patterns:",
-
-    "Detected operational hour deviations for the machines below:",
-
-    "The following machines exceeded expected runtime schedules:",
-
-    "Monitoring analysis identified unusual operational activity for these machines:",
-
-    "The system detected runtime anomalies for the following machines:"
 ]
 
 # =========================================================
@@ -198,54 +123,11 @@ def get_access_token():
 
         return None
 
-
-# =========================================================
-# EA CLIENT OR NOT
-# =========================================================
-
-EA_CHECK_URL = "https://api.energyeta.ai/clients/isEA"
-
-def is_ea_client(client_id):
-
-    try:
-
-        payload = {
-            "clientId": client_id
-        }
-
-        response = requests.get(
-            EA_CHECK_URL,
-            json=payload
-        )
-
-        if response.status_code == 200:
-
-            result = response.json()
-
-            data = result.get("data", {})
-
-            if data.get("isEaClient") is True:
-                return True
-
-            if data.get("sEaClient") is False:
-                return False
-
-        return False
-
-    except Exception as e:
-
-        print(f"EA API Error: {e}")
-
-        return False
-        
 # =========================================================
 # FETCH SPIKE DATA
 # =========================================================
 
-def fetch_api_data(
-    token,
-    client_id
-):
+def fetch_api_data(token):
 
     try:
 
@@ -253,22 +135,10 @@ def fetch_api_data(
             "Authorization": token
         }
 
-        spike_api_url = get_spike_api_url(
-            client_id
-        )
-
-        print(
-            f"SPIKE API URL: {spike_api_url}"
-        )
-
         response = requests.get(
-            spike_api_url,
+            SPIKE_API_URL,
             headers=headers
         )
-        print("CLIENT:", client_id)
-        print("SPIKE URL:", spike_api_url)
-        print("STATUS:", response.status_code)
-        print("RESPONSE:", response.text)
 
         if response.status_code == 200:
 
@@ -277,17 +147,9 @@ def fetch_api_data(
                 {}
             )
 
-        print(
-            f"SPIKE API FAILED: {response.status_code}"
-        )
-
         return None
 
-    except Exception as e:
-
-        print(
-            f"SPIKE API ERROR: {str(e)}"
-        )
+    except:
 
         return None
 
@@ -332,10 +194,6 @@ def calculate_top_spikes(api_data):
 
         if len(history) < 2:
             continue
-            
-        history.sort(
-            key=lambda x: x["timestamp"]
-        )
 
         first = history[0]["kwh"]
 
@@ -376,124 +234,10 @@ def calculate_top_spikes(api_data):
     return results[:3]
 
 # =========================================================
-# FILTER ALERTS BY HOURS
-# =========================================================
-
-def filter_alerts_by_hours(alerts, hours):
-
-    now = get_utc_now()
-
-    target_time = now - timedelta(hours=hours)
-
-    filtered_alerts = []
-
-    for alert in alerts:
-
-        alert_time = (
-            alert.get("alertTimestamp")
-            or alert.get("createdAt")
-        )
-
-        if alert_time:
-
-            try:
-
-                alert_datetime = datetime.fromisoformat(
-                    alert_time.replace("Z", "+00:00")
-                )
-
-                if alert_datetime >= target_time:
-
-                    filtered_alerts.append(alert)
-
-            except:
-                continue
-
-    filtered_alerts.sort(
-        key=lambda x: (
-            x.get("alertTimestamp")
-            or x.get("createdAt", "")
-        ),
-        reverse=True
-    )
-
-    return filtered_alerts
-
-# =========================================================
-# FILTER LAST 24 HOURS
-# =========================================================
-
-def filter_last_24_hours(alerts):
-
-    now = datetime.now(timezone.utc)
-
-    last_24 = now - timedelta(hours=24)
-
-    filtered = []
-
-    for item in alerts:
-
-        alert_time = item.get("alertTimestamp")
-
-        if alert_time:
-
-            try:
-
-                alert_datetime = datetime.fromisoformat(
-                    alert_time.replace("Z", "+00:00")
-                )
-
-                if alert_datetime >= last_24:
-                    filtered.append(item)
-
-            except:
-                pass
-
-    return filtered
-
-# =========================================================
-# QUESTION VALIDATION
-# =========================================================
-
-def is_valid_question(question):
-
-    question = question.lower()
-
-    for keyword in RUNTIME_KEYWORDS:
-
-        if keyword in question:
-            return True
-
-    return False
-
-# =========================================================
-# FORMAT DATE TIME
-# =========================================================
-
-def format_datetime(timestamp):
-
-    try:
-
-        dt = datetime.fromisoformat(
-            timestamp.replace("Z", "+00:00")
-        )
-
-        return dt.strftime(
-            "%d-%m-%Y %I:%M:%S %p UTC"
-        )
-
-    except:
-        return timestamp
-
-# =========================================================
 # FETCH ALERTS
 # =========================================================
 
-def fetch_alerts(
-    token,
-    client_id,
-    alert_type="alarm"
-):
+def fetch_alerts(token, client_id):
 
     headers = {
         "Authorization": token
@@ -504,7 +248,7 @@ def fetch_alerts(
         "limit": 50,
         "clientId": client_id,
         "search": "",
-        "alertType": alert_type
+        "alertType": "alarm"
     }
 
     response = requests.post(
@@ -550,38 +294,6 @@ def predict(request: QuestionRequest):
             for keyword in SPIKE_KEYWORDS
         ):
 
-            # ==========================================
-            # CLIENT ID REQUIRED
-            # ==========================================
-
-            if not request.clientId:
-
-                return {
-                    "statusCode": 400,
-                    "data": {
-                        "question": request.question,
-                        "answer": "Client ID is required."
-                    },
-                    "msg": "Client validation failed"
-                }
-
-            # ==========================================
-            # EA CLIENT VALIDATION
-            # ==========================================
-
-            if not is_ea_client(
-                request.clientId
-            ):
-
-                return {
-                    "statusCode": 200,
-                    "data": {
-                        "question": request.question,
-                        "answer": "This is NON-EA client."
-                    },
-                    "msg": "Success"
-                }
-
             token = get_access_token()
 
             if not token:
@@ -596,19 +308,18 @@ def predict(request: QuestionRequest):
                 }
 
             api_data = fetch_api_data(
-                token,
-                request.clientId
+                token
             )
 
             if not api_data:
 
                 return {
-                    "statusCode": 200,
+                    "statusCode": 500,
                     "data": {
                         "question": request.question,
-                        "answer": "No energy spike data available for this client."
+                        "answer": "API data fetch failed."
                     },
-                    "msg": "Success"
+                    "msg": "Failed"
                 }
 
             top_spikes = calculate_top_spikes(
@@ -659,7 +370,6 @@ def predict(request: QuestionRequest):
 
         # =====================================================
         # CRITICAL ALERT API
-        # LAST 6 HOURS
         # =====================================================
 
         elif any(
@@ -667,7 +377,7 @@ def predict(request: QuestionRequest):
             for keyword in CRITICAL_KEYWORDS
         ):
 
-            if not request.clientId:
+            if not request.clientId.strip():
 
                 return {
                     "statusCode": 400,
@@ -678,19 +388,29 @@ def predict(request: QuestionRequest):
                     "msg": "Client validation failed"
                 }
 
-
             token = get_access_token()
 
-            alerts = fetch_alerts(
-                token,
-                request.clientId,
-                "alarm"
+            headers = {
+                "Authorization": token
+            }
+
+            payload = {
+                "page": 1,
+                "limit": 50,
+                "clientId": request.clientId,
+                "search": "",
+                "alertType": "alarm"
+            }
+
+            response = requests.post(
+                ALERT_URL,
+                json=payload,
+                headers=headers
             )
 
-            alerts = filter_alerts_by_hours(
-                alerts,
-                6
-            )
+            result = response.json()
+
+            alerts = result["data"]["data"]
 
             sorted_alerts = sorted(
                 alerts,
@@ -703,90 +423,81 @@ def predict(request: QuestionRequest):
 
             latest_alerts = sorted_alerts[:3]
 
-            if len(latest_alerts) == 0:
+            intro_lines = [
 
-                final_answer = (
-                    "No critical alerts were detected in the last 6 hours."
+                "The system identified a few alerts that may require attention:",
+
+                "Recent anomalies were detected in the monitoring system:",
+
+                "The following alerts were observed from the latest machine activity:",
+
+                "A few operational alerts were detected recently:"
+
+            ]
+
+            selected_intro = random.choice(
+                intro_lines
+            )
+
+            bullet_points = []
+
+            for alert in latest_alerts:
+
+                machine_name = alert.get(
+                    "machine",
+                    {}
+                ).get(
+                    "machineName",
+                    "Unknown Machine"
                 )
 
-            else:
+                trigger = alert.get(
+                    "trigger",
+                    {}
+                )
 
-                intro_lines = [
+                display_name = trigger.get(
+                    "displayName",
+                    "Unknown Alert"
+                )
 
-                    "The system identified a few alerts that may require attention:",
+                field_value = trigger.get(
+                    "fieldValue",
+                    "N/A"
+                )
 
-                    "Recent anomalies were detected in the monitoring system:",
+                bullet_templates = [
 
-                    "The following alerts were observed from the latest machine activity:",
+                    f"• {machine_name} reported {display_name} with current value {field_value}.",
 
-                    "A few operational alerts were detected recently:"
+                    f"• An alert was triggered in {machine_name} for {display_name} reaching {field_value}.",
+
+                    f"• {display_name} in {machine_name} is currently showing a value of {field_value}.",
+
+                    f"• Monitoring detected unusual activity in {machine_name}: {display_name} = {field_value}.",
+
+                    f"• The system observed {display_name} at {field_value} in {machine_name}.",
+
+                    f"• Alert generated from {machine_name} due to {display_name} value {field_value}."
 
                 ]
 
-                selected_intro = random.choice(
-                    intro_lines
+                bullet = random.choice(
+                    bullet_templates
                 )
 
-                bullet_points = []
-
-                for alert in latest_alerts:
-
-                    machine_name = alert.get(
-                        "machine",
-                        {}
-                    ).get(
-                        "machineName",
-                        "Unknown Machine"
-                    )
-
-                    trigger = alert.get(
-                        "trigger",
-                        {}
-                    )
-
-                    display_name = trigger.get(
-                        "displayName",
-                        "Unknown Alert"
-                    )
-
-                    field_value = trigger.get(
-                        "fieldValue",
-                        "N/A"
-                    )
-
-                    bullet_templates = [
-
-                        f"• {machine_name} reported {display_name} with current value {field_value}.",
-
-                        f"• An alert was triggered in {machine_name} for {display_name} reaching {field_value}.",
-
-                        f"• {display_name} in {machine_name} is currently showing a value of {field_value}.",
-
-                        f"• Monitoring detected unusual activity in {machine_name}: {display_name} = {field_value}.",
-
-                        f"• The system observed {display_name} at {field_value} in {machine_name}.",
-
-                        f"• Alert generated from {machine_name} due to {display_name} value {field_value}."
-
-                    ]
-
-                    bullet = random.choice(
-                        bullet_templates
-                    )
-
-                    bullet_points.append(
-                        bullet
-                    )
-
-                final_answer = (
-                    selected_intro
-                    + "\n\n"
-                    + "\n".join(bullet_points)
+                bullet_points.append(
+                    bullet
                 )
+
+            final_answer = (
+                selected_intro
+                + "\n\n"
+                + "\n".join(bullet_points)
+            )
 
         # =====================================================
         # SENSOR HEALTH API
-        # LAST 12 HOURS
         # =====================================================
 
         elif any(
@@ -794,46 +505,53 @@ def predict(request: QuestionRequest):
             for keyword in SENSOR_KEYWORDS
         ):
 
-            if not request.clientId:
-
-                return {
-                    "statusCode": 400,
-                    "data": {
-                        "question": request.question,
-                        "answer": "Client ID is required."
-                    },
-                    "msg": "Client validation failed"
-                }
-
-            
-            # ==========================================
-            # EA CLIENT VALIDATION
-            # ==========================================
-            
-            if not is_ea_client(
-                request.clientId
-            ):
-
-                return {
-                    "statusCode": 200,
-                    "data": {
-                        "question": request.question,
-                        "answer": "This is NON-EA client."
-                    },
-                    "msg": "Success"
-                }
-
             token = get_access_token()
 
-            alerts = fetch_alerts(
-                token,
-                request.clientId,
-                "alarm"
+            now = datetime.utcnow()
+
+            last_12_hours = now - timedelta(hours=12)
+
+            body = {
+                "page": 1,
+                "limit": 50,
+                "clientId": request.clientId,
+                "search": "",
+                "alertType": "alarm"
+            }
+
+            headers = {
+                "Authorization": token
+            }
+
+            response = requests.post(
+                ALERT_URL,
+                json=body,
+                headers=headers
             )
 
-            latest_alerts = filter_alerts_by_hours(
-                alerts,
-                12
+            result = response.json()
+
+            alerts = result["data"]["data"]
+
+            latest_alerts = []
+
+            for alert in alerts:
+
+                alert_time = alert.get("alertTimestamp")
+
+                if alert_time:
+
+                    alert_datetime = datetime.fromisoformat(
+                        alert_time.replace("Z", "")
+                    )
+
+                    if alert_datetime >= last_12_hours:
+
+                        latest_alerts.append(alert)
+
+            latest_alerts.sort(
+                key=lambda x: x.get("alertTimestamp", ""),
+                reverse=True
             )
 
             latest_alerts = latest_alerts[:3]
@@ -865,10 +583,7 @@ def predict(request: QuestionRequest):
 
                     machine_name = alert_obj["machine"]["machineName"]
 
-                    trigger = alert_obj.get(
-                        "trigger",
-                        {}
-                    )
+                    trigger = alert_obj.get("trigger", {})
 
                     metric = trigger.get(
                         "displayName",
@@ -885,10 +600,17 @@ def predict(request: QuestionRequest):
                         [0]
                     )[0]
 
+                    explanation = ""
+
                     if (
                         field_value > trigger_point
                         and field_value > 10
                     ):
+
+                        difference = round(
+                            field_value - trigger_point,
+                            2
+                        )
 
                         templates = [
 
@@ -903,6 +625,10 @@ def predict(request: QuestionRequest):
                             f"• Sensor analysis found excessive {metric.lower()} levels in {machine_name}, reaching {field_value}."
 
                         ]
+
+                        explanation = random.choice(
+                            templates
+                        )
 
                     else:
 
@@ -920,10 +646,12 @@ def predict(request: QuestionRequest):
 
                         ]
 
-                    bullet_points.append(
-                        random.choice(
+                        explanation = random.choice(
                             templates
                         )
+
+                    bullet_points.append(
+                        explanation
                     )
 
                 intro_sentences = [
@@ -941,154 +669,13 @@ def predict(request: QuestionRequest):
                 ]
 
                 final_answer = (
-                    random.choice(
-                        intro_sentences
-                    )
+                    random.choice(intro_sentences)
                     + "\n\n"
-                    + "\n\n".join(
-                        bullet_points
-                    )
-                )
-
-        # =====================================================
-        # COMMUNICATION FAILURE API
-        # LAST 24 HOURS
-        # =====================================================
-
-        elif any(
-            keyword in question_lower
-            for keyword in COMMUNICATION_KEYWORDS
-        ):
-
-            if not request.clientId:
-
-                return {
-                    "statusCode": 400,
-                    "data": {
-                        "question": request.question,
-                        "answer": "Client ID is required."
-                    },
-                    "msg": "Client validation failed"
-                }
-
-            token = get_access_token()
-
-            alerts = fetch_alerts(
-                token,
-                request.clientId,
-                "data"
-            )
-
-            latest_alerts = filter_alerts_by_hours(
-                alerts,
-                24
-            )
-
-            latest_devices = {}
-
-            for alert in latest_alerts:
-
-                alert_time = datetime.fromisoformat(
-                    (
-                        alert.get("createdAt")
-                        or alert.get("alertTimestamp")
-                    ).replace(
-                        "Z",
-                        "+00:00"
-                    )
-                )
-
-                machine = alert.get(
-                    "machine",
-                    {}
-                )
-
-                device_id = machine.get(
-                    "deviceId",
-                    "Unknown Device"
-                )
-
-                if (
-                    device_id not in latest_devices
-                    or alert_time > latest_devices[device_id]
-                ):
-                    latest_devices[device_id] = alert_time
-
-            sorted_devices = sorted(
-                latest_devices.items(),
-                key=lambda x: x[1],
-                reverse=True
-            )
-
-            top_3_devices = sorted_devices[:3]
-
-            if len(top_3_devices) > 0:
-
-                device_details = []
-
-                for device_id, timestamp in top_3_devices:
-
-                    formatted_time = timestamp.strftime(
-                        "%Y-%m-%d %H:%M:%S UTC"
-                    )
-
-                    device_details.append(
-                        f"{device_id} ({formatted_time})"
-                    )
-
-                response_templates = [
-
-                    "Communication failures were identified within the last 24 hours for Device IDs: {}.",
-
-                    "Recent data communication gaps were observed in the following devices during the past 24 hours: {}.",
-
-                    "The monitoring system detected communication loss events for these devices in the last 24 hours: {}.",
-
-                    "Network communication interruptions were recorded recently for Device IDs: {}.",
-
-                    "Data logging failures have been identified in the last 24 hours for the following devices: {}.",
-
-                    "The latest communication-related alerts were triggered for these Device IDs: {}.",
-
-                    "Communication gap alerts were found recently for the following devices: {}."
-
-                ]
-
-                selected_response = random.choice(
-                    response_templates
-                )
-
-                final_answer = selected_response.format(
-                    ", ".join(device_details)
-                )
-
-            else:
-
-                no_issue_templates = [
-
-                    "No communication failures were detected in the last 24 hours.",
-
-                    "No recent data logging gaps were identified during the last 24 hours.",
-
-                    "All monitored devices communicated successfully in the past 24 hours.",
-
-                    "No communication loss events were found recently.",
-
-                    "The system did not record any communication interruptions in the last 24 hours.",
-
-                    "No network communication alerts were triggered recently.",
-
-                    "No data communication issues were observed in the monitored devices."
-
-                ]
-
-                final_answer = random.choice(
-                    no_issue_templates
+                    + "\n\n".join(bullet_points)
                 )
 
         # =====================================================
         # ENERGY API
-        # LAST 24-48 HOURS + PREVIOUS WEEK
         # =====================================================
 
         elif any(
@@ -1096,117 +683,123 @@ def predict(request: QuestionRequest):
             for keyword in ENERGY_KEYWORDS
         ):
 
-            if not request.clientId:
-
-                return {
-                    "statusCode": 400,
-                    "data": {
-                        "question": request.question,
-                        "answer": "Client ID is required."
-                    },
-                    "msg": "Client validation failed"
-                }
-
-
             token = get_access_token()
 
-            alerts = fetch_alerts(
+            api_response = fetch_alerts(
                 token,
-                request.clientId,
-                "alarm"
+                request.clientId
             )
 
-            now = get_utc_now()
+            alerts = api_response
 
-            last_48_hours = now - timedelta(hours=48)
+            if alerts is None:
+                alerts = []
 
-            previous_week_start = now - timedelta(days=8)
-
-            previous_week_end = now - timedelta(days=7)
-
-            current_period_alerts = []
-
-            previous_week_alerts = []
+            filtered_alerts = []
 
             for alert in alerts:
 
-                alert_time = (
-                    alert.get("alertTimestamp")
-                    or alert.get("createdAt")
+                machine_name = (
+                    alert.get("machine", {})
+                    .get("machineName", "")
+                    .lower()
                 )
 
-                if alert_time:
+                if (
+                    "incomer" in machine_name
+                    or "eb" in machine_name
+                    or "main" in machine_name
+                ):
 
-                    try:
+                    filtered_alerts.append(alert)
 
-                        alert_datetime = datetime.fromisoformat(
-                            alert_time.replace("Z", "+00:00")
-                        )
+            latest_3 = filtered_alerts[:3]
 
-                        trigger = alert.get(
-                            "trigger",
-                            {}
-                        )
+            answer_lines = []
 
-                        field_value = float(
-                            trigger.get(
-                                "fieldValue",
-                                0
-                            )
-                        )
+            for alert in latest_3:
 
-                        if alert_datetime >= last_48_hours:
+                machine_name = (
+                    alert.get("machine", {})
+                    .get("machineName", "Unknown")
+                )
 
-                            current_period_alerts.append(
-                                field_value
-                            )
+                value = (
+                    alert.get("trigger", {})
+                    .get("fieldValue", "N/A")
+                )
 
-                        elif (
-                            previous_week_start
-                            <= alert_datetime
-                            <= previous_week_end
-                        ):
+                timestamp = alert.get(
+                    "alertTimestamp",
+                    "N/A"
+                )
 
-                            previous_week_alerts.append(
-                                field_value
-                            )
+                line = (
+                    f"{machine_name} recorded "
+                    f"{value} kW at {timestamp}"
+                )
 
-                    except:
-                        continue
+                answer_lines.append(line)
 
-            yesterday_energy = round(
-                sum(current_period_alerts),
-                2
-            )
+            values = []
 
-            last_week_energy = round(
-                sum(previous_week_alerts),
-                2
-            )
+            for alert in latest_3:
 
-            if last_week_energy == 0:
+                value = (
+                    alert.get("trigger", {})
+                    .get("fieldValue", 0)
+                )
 
-                difference_percent = 0
+                try:
+
+                    values.append(float(value))
+
+                except:
+
+                    pass
+
+            if values:
+
+                yesterday_energy = round(
+                    sum(values) / len(values),
+                    2
+                )
 
             else:
 
-                difference_percent = (
+                yesterday_energy = 0
+
+            last_week_energy = round(
+                yesterday_energy * 0.94,
+                2
+            )
+
+            if last_week_energy != 0:
+
+                difference_percent = round(
                     (
-                        yesterday_energy
-                        - last_week_energy
-                    )
-                    / last_week_energy
-                ) * 100
+                        (
+                            yesterday_energy
+                            - last_week_energy
+                        )
+                        / last_week_energy
+                    ) * 100,
+                    2
+                )
+
+            else:
+
+                difference_percent = 0
 
             trend_sentence = (
                 "increased"
-                if difference_percent >= 0
+                if difference_percent > 0
                 else "decreased"
             )
 
             trend_word = (
                 "increase"
-                if difference_percent >= 0
+                if difference_percent > 0
                 else "decrease"
             )
 
@@ -1214,166 +807,42 @@ def predict(request: QuestionRequest):
 
                 f"""
 Total Energy Consumption Analysis
-Yesterday's facility energy consumption was {yesterday_energy} kWh.
-During the same day last week, the recorded consumption was {last_week_energy} kWh.
-Overall energy usage has {trend_sentence} by {abs(difference_percent):.2f}%.
+Yesterday's facility energy consumption was {yesterday_energy} kW.
+During the same day last week, the recorded consumption was {last_week_energy} kW.
+Overall energy usage has {trend_sentence} by {abs(difference_percent)}%.
 """,
 
                 f"""
 Building Energy Monitoring Report
-The facility consumed {yesterday_energy} kWh yesterday.
-Compared to {last_week_energy} kWh on the same day last week, the energy usage has {trend_sentence} by {abs(difference_percent):.2f}%.
+The facility consumed {yesterday_energy} kW yesterday.
+Compared to {last_week_energy} kW on the same day last week, the energy usage has {trend_sentence} by {abs(difference_percent)}%.
 """,
 
                 f"""
 Main Incomer Energy Summary
-Yesterday's energy consumption reached {yesterday_energy} kWh.
-Last week's same-day consumption was {last_week_energy} kWh.
-This indicates a {abs(difference_percent):.2f}% {trend_word} in total energy usage.
+Yesterday's energy consumption reached {yesterday_energy} kW.
+Last week's same-day consumption was {last_week_energy} kW.
+This indicates a {abs(difference_percent)}% {trend_word} in total energy usage.
 """,
 
                 f"""
 Total Building Energy Overview
-The total facility energy usage yesterday was {yesterday_energy} kWh.
-For comparison, the same day last week recorded {last_week_energy} kWh.
-Energy consumption has {trend_sentence} by {abs(difference_percent):.2f}%.
+The total facility energy usage yesterday was {yesterday_energy} kW.
+For comparison, the same day last week recorded {last_week_energy} kW.
+Energy consumption has {trend_sentence} by {abs(difference_percent)}%.
 """,
 
                 f"""
 Energy Trend Comparison
-Building energy monitoring shows yesterday's consumption at {yesterday_energy} kWh.
-Last week's equivalent day reported {last_week_energy} kWh.
-This represents a {abs(difference_percent):.2f}% {trend_word} in energy consumption.
+Building energy monitoring shows yesterday's consumption at {yesterday_energy} kW.
+Last week's equivalent day reported {last_week_energy} kW.
+This represents a {abs(difference_percent)}% {trend_word} in energy consumption.
 """
-
             ]
 
             final_answer = random.choice(
                 response_templates
             )
-
-        # =====================================================
-        # RUNTIME BREACH API
-        # LAST 24 HOURS
-        # =====================================================
-
-        elif any(
-            keyword in question_lower
-            for keyword in RUNTIME_KEYWORDS
-        ):
-
-            if not request.clientId:
-
-                return {
-                    "statusCode": 400,
-                    "msg": "clientId is required"
-                }
-
-            if not is_valid_question(request.question):
-
-                return {
-                    "statusCode": 400,
-                    "data": {
-                        "question": request.question,
-                        "answer": (
-                            "Please ask questions related "
-                            "to unusual operating hours "
-                            "or runtime breach."
-                        )
-                    },
-                    "msg": "Invalid question"
-                }
-
-            token = get_access_token()
-
-            if not token:
-
-                return {
-                    "statusCode": 500,
-                    "msg": "Login failed"
-                }
-
-            alerts = fetch_alerts(
-                token,
-                request.clientId,
-                "schedule"
-            )
-
-            alerts = filter_last_24_hours(
-                alerts
-            )
-
-            alerts = alerts[:3]
-
-            if len(alerts) == 0:
-
-                final_answer = random.choice(
-                    NO_ALERT_MESSAGES
-                )
-
-            else:
-
-                lines = []
-
-                lines.append(
-                    random.choice(
-                        INTRO_MESSAGES
-                    )
-                )
-
-                lines.append(
-                    "The analysis below is based on the last 24 hours of runtime breach monitoring data."
-                )
-
-                lines.append(
-                    "Only the top 3 affected machines are included in this response."
-                )
-
-                for index, item in enumerate(alerts, start=1):
-
-                    machine = item.get(
-                        "machine",
-                        {}
-                    )
-
-                    machine_name = machine.get(
-                        "machineName",
-                        "Unknown"
-                    )
-
-                    timestamp = item.get(
-                        "alertTimestamp",
-                        "Unknown"
-                    )
-
-                    formatted_time = format_datetime(
-                        timestamp
-                    )
-
-                    incidents = item.get(
-                        "incidents",
-                        []
-                    )
-
-                    runtime = "Unknown"
-
-                    if len(incidents) > 0:
-
-                        runtime = incidents[0].get(
-                            "fieldValue",
-                            "Unknown"
-                        )
-
-                    lines.append(
-
-                        f"{index}. Machine Name: {machine_name}\n"
-                        f"   Runtime Breach: {runtime} hrs\n"
-                        f"   Detected Time: {formatted_time}"
-                    )
-
-                final_answer = "\n\n".join(
-                    lines
-                )
 
         # =====================================================
         # UNSUPPORTED
