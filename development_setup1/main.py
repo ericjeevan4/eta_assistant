@@ -115,3 +115,188 @@ COMMUNICATION_KEYWORDS = [
     "network issue",
     "network failure"
 ]
+
+# =========================================================
+# COMMON TOKEN FUNCTION
+# =========================================================
+
+def get_access_token():
+
+    try:
+
+        response = requests.post(
+            LOGIN_URL,
+            json=LOGIN_PAYLOAD
+        )
+
+        if response.status_code == 200:
+
+            return response.json()["data"]["accessToken"]
+
+        return None
+
+    except:
+
+        return None
+# =========================================================
+# EA CLIENT OR NOT
+# =========================================================
+def is_ea_client(client_data, request_client_id):
+
+    try:
+
+        for client in client_data["data"]["user"]["clients"]:
+
+            # CHECK ONLY REQUESTED CLIENT
+            if client.get("clientId") != request_client_id:
+                continue
+
+            configs = client.get(
+                "userDefinedTableConfig",
+                []
+            )
+
+            for config in configs:
+
+                operations = config.get(
+                    "operations",
+                    []
+                )
+
+                for operation in operations:
+
+                    val = operation.get(
+                        "val",
+                        {}
+                    )
+
+                    category_values = val.get(
+                        "categoryValue",
+                        []
+                    )
+
+                    for item in category_values:
+
+                        if item.get(
+                            "machineType"
+                        ) == "EA":
+
+                            return True
+
+        return False
+
+    except:
+
+        return False
+# =========================================================
+# FETCH SPIKE DATA
+# =========================================================
+
+def fetch_api_data(token):
+
+    try:
+
+        headers = {
+            "Authorization": token
+        }
+
+        spike_api_url = get_spike_api_url()
+
+        response = requests.get(
+            spike_api_url,
+            headers=headers
+        )
+
+        if response.status_code == 200:
+
+            return response.json().get(
+                "data",
+                {}
+            )
+
+        return None
+
+    except:
+
+        return None
+
+# =========================================================
+# PROCESS SPIKES
+# =========================================================
+
+def calculate_top_spikes(api_data):
+
+    machine_history = {}
+
+    for date, machines in api_data.items():
+
+        for machine in machines:
+
+            name = machine.get(
+                "machineName"
+            )
+
+            kwh = machine.get(
+                "kwh",
+                0
+            )
+
+            timestamp = machine.get(
+                "timestamp",
+                date
+            )
+
+            if name not in machine_history:
+
+                machine_history[name] = []
+
+            machine_history[name].append({
+                "timestamp": timestamp,
+                "kwh": kwh
+            })
+
+    results = []
+
+    for machine_name, history in machine_history.items():
+
+        if len(history) < 2:
+            continue
+
+        first = history[0]["kwh"]
+
+        last = history[-1]["kwh"]
+
+        raw_timestamp = history[-1]["timestamp"]
+
+        formatted_timestamp = datetime.strptime(
+            raw_timestamp,
+            "%Y-%m-%dT%H:%M:%S.%fZ"
+        ).strftime(
+            "%d-%m-%Y %I:%M:%S %p"
+        )
+
+        if first == 0:
+            continue
+
+        slope_percent = (
+            (last - first) / first
+        ) * 100
+
+        if slope_percent > 0:
+
+            results.append({
+                "machineName": machine_name,
+                "latestTimestamp": formatted_timestamp,
+                "slopePercent": round(
+                    slope_percent,
+                    2
+                )
+            })
+
+    results.sort(
+        key=lambda x: x["slopePercent"],
+        reverse=True
+    )
+
+    return results[:3]
+
